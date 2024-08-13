@@ -2107,9 +2107,7 @@ void glfw_start() {
 
 
 int main(int argc, char** argv) {
-    ma_ffmpeg_start("https://ws-cdn-video.rule34.xxx//images/1440/f546248bdbee34cf8ea8632eab45a551.mp4?10937904");
     glfw_start();
-
     return 0;
 
 #if 0
