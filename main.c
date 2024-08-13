@@ -1,5 +1,5 @@
 /**
- * "../../tcc/tcc" -run -I../include -I../include/winapi -I../include/libxml2 -L. -lavcodec-61 -lavformat-61 -lavutil-59 -lswresample-5 -lswscale-8 -lcurl-x64 -lxml2-2 -lglfw3 -lportaudio main.c
+ * "../../tcc/tcc" -run -I../include -I../extlibs/include -I../extlibs/include/winapi -I../extlibs/include/libxml2 -L. -lavcodec-61 -lavformat-61 -lavutil-59 -lswresample-5 -lswscale-8 -lglfw3 -lcurl-x64 -lxml2-2 main.c
  */
 #ifndef PROJECT_H
 #define PROJECT_H
@@ -21,6 +21,39 @@ extern "C" {
 #define PRINT_TEXT(text) printf(PRINT_TEXT_COLOR_WHITE "%s:" PRINT_TEXT_COLOR_MAGENTA "%i" PRINT_TEXT_COLOR_WHITE ": in '" PRINT_TEXT_COLOR_BLUE "%s" PRINT_TEXT_COLOR_WHITE "' function: " PRINT_TEXT_COLOR_RED "%s" PRINT_TEXT_COLOR_WHITE "\n", __FILE__, __LINE__, __FUNCTION__, text)
 
 #endif /* Print text */
+
+#if 1 /* File load */
+
+#include <fcntl.h>
+#include <errno.h>
+
+int file_load(const char* file_name, void** out_data, size_t* out_size) {
+    int result;
+    int file_descriptor;
+
+    if ((file_descriptor = open(file_name, O_RDONLY | O_BINARY)) > 0) {
+        if ((out_size[0] = filelength(file_descriptor)) > 0) {
+            if (read(file_descriptor, out_data[0], out_size[0]) > 0) {
+                result = 0;
+            }
+            else {
+                result = errno;
+            }
+        }
+        else {
+            result = errno;
+        }
+
+        close(file_descriptor);
+    }
+    else {
+        result = errno;
+    }
+
+    return result;
+}
+
+#endif /* File load */
 
 #if 1 /* FFmpeg */
 
@@ -88,274 +121,7 @@ int ffmpeg_audio_context_alloc(struct SwrContext** out_swr_context, AVCodecConte
 
 #endif /* FFmpeg */
 
-#if 1 /* cURL */
-
-#define __MINGW32__ /* tcc: curl/system.h:464: error: ';' expected (got "curl_socklen_t") */
-    #include <curl/curl.h>
-#undef __MINGW32__
-
-size_t curl_write_function_callback(void* data, size_t size, size_t nmemb, void** out_data) {
-    void* reallocated_data;
-    size_t data_size;
-
-    data_size = out_data[0] ? *(size_t*)out_data[0] : 0;
-
-    if ((reallocated_data = realloc(out_data[0], size * nmemb + sizeof(size_t) + data_size)) != NULL) {
-        out_data[0] = reallocated_data;
-        memcpy(out_data[0] + sizeof(size_t) + data_size, data, size * nmemb);
-        *(size_t*)out_data[0] = size * nmemb + data_size;
-    }
-    else {
-        PRINT_TEXT(strerror(errno));
-    }
-
-    return size * nmemb;
-}
-
-/**
- * @note First "sizeof(size_t)" in "out_data" - data size.
- */
-CURLcode curl_get_url_data(const char* url, void** out_data, long timeout_ms) {
-    CURLcode curl_code;
-
-    if ((curl_code = curl_global_init(CURL_GLOBAL_ALL)) == CURLE_OK) {
-        CURL* curl;
-
-        if ((curl = curl_easy_init()) != NULL) {
-            out_data[0] = NULL; /* This function should not do this. */
-
-            if (
-                (curl_code = curl_easy_setopt(curl, CURLOPT_URL, url)) == CURLE_OK &&
-                (curl_code = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_function_callback)) == CURLE_OK &&
-                (curl_code = curl_easy_setopt(curl, CURLOPT_WRITEDATA, out_data)) == CURLE_OK &&
-                (curl_code = curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms)) == CURLE_OK &&
-                (curl_code = curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0)) == CURLE_OK &&
-                (curl_code = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1)) == CURLE_OK &&
-                (curl_code = curl_easy_setopt(curl, CURLOPT_USERAGENT, "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0")) == CURLE_OK
-            ) {
-                curl_code = curl_easy_perform(curl);
-            }
-
-            curl_easy_cleanup(curl);
-        }
-        else {
-            curl_code = CURLE_FAILED_INIT;
-        }
-
-        curl_global_cleanup();
-    }
-
-    return curl_code;
-}
-
-#endif /* cURL */
-
-#if 1 /* XML */
-
-#include <libxml/HTMLparser.h>
-
-xmlNode* xml_find(xmlNode* node, const xmlChar* node_name, const xmlChar* prop_name, const xmlChar* prop_value, const xmlChar* node_content) {
-    while (node != NULL) {
-        if (node->type == XML_ELEMENT_NODE) {
-            int is_this = 1;
-
-            if (node_name != NULL) {
-                if (xmlStrcmp(node->name, node_name) != 0) {
-                    is_this = 0;
-                }
-            }
-
-            xmlChar* prop_data = NULL;
-
-            if (prop_name != NULL && is_this == 1) {
-                if ((prop_data = xmlGetProp(node, prop_name)) == NULL) { /* Do not forget to free up memory after xmlGetProp. */
-                    is_this = 0;
-                }
-            }
-
-            if (prop_value != NULL && is_this == 1) {
-                if (prop_data != NULL) {
-                    if (xmlStrcmp(prop_data, prop_value) != 0) {
-                        is_this = 0;
-                    }
-                }
-            }
-
-            if (prop_data != NULL) {
-                xmlFree(prop_data);
-            }
-
-            if (node_content != NULL && is_this == 1) {
-                xmlChar* content;
-
-                is_this = 0;
-
-                if ((content = xmlNodeGetContent(node)) != NULL) { /* Do not forget to free up memory after xmlNodeGetContent. */
-                    if (xmlStrstr(content, node_content) != NULL) {
-                        is_this = 1;
-                    }
-
-                    xmlFree(content);
-                }
-            }
-
-            if (is_this == 1) {
-                return node;
-            }
-        }
-
-        xmlNode* result;
-
-        if ((result = xml_find(node->children, node_name, prop_name, prop_value, node_content)) != NULL) {
-            return result;
-        }
-
-        node = node->next;
-    }
-
-    return NULL;
-}
-
-#endif /* XML */
-
-#if 1 /* glad */
-
-#define GLAD_GL_IMPLEMENTATION
-#include <glad/gl.h>
-
-void ogl_debug_message_callback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* user_param) {
-    PRINT_TEXT(message);
-}
-
-/**
- * @return OpenGL version.
- */
-int ogl_init(GLboolean enable_debug) {
-    int version;
-
-    if ((version = gladLoaderLoadGL()) > 0) {
-        if (enable_debug == GL_TRUE && GLAD_VERSION_MAJOR(version) == 4 && GLAD_VERSION_MINOR(version) >= 3) {
-            glDebugMessageCallback(ogl_debug_message_callback, NULL);
-            glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, GL_TRUE);
-        }
-    }
-
-    return version;
-}
-
-GLuint ogl_texture_create(GLenum target, GLint mag_filter, GLint min_filter, GLint wrap_s, GLint wrap_t, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
-    GLuint texture;
-
-    glGenTextures(1, &texture);
-
-    if (texture > 0) {
-        glBindTexture(target, texture);
-        glTexParameteri(target, GL_TEXTURE_MAG_FILTER, mag_filter);
-        glTexParameteri(target, GL_TEXTURE_MIN_FILTER, min_filter);
-        glTexParameteri(target, GL_TEXTURE_WRAP_S, wrap_s);
-        glTexParameteri(target, GL_TEXTURE_WRAP_T, wrap_t);
-        glTexImage2D(target, 0, format, width, height, 0, format, type, pixels);
-        glGenerateMipmap(target);
-        glBindTexture(target, 0);
-    }
-
-    return texture;
-}
-
-GLuint ogl_shader_create(GLenum type, GLsizei count, const GLchar* const* string, const GLint* length) {
-    GLuint shader;
-
-    if ((shader = glCreateShader(type)) > 0) {
-        glShaderSource(shader, count, string, length);
-        glCompileShader(shader);
-    }
-
-    return shader;
-}
-
-GLuint ogl_program_create(GLuint count, GLuint* shaders) {
-    GLuint program;
-
-    if ((program = glCreateProgram()) > 0) {
-        for (GLuint i = 0; i < count; ++i) {
-            glAttachShader(program, shaders[i]);
-        }
-
-        glLinkProgram(program);
-    }
-
-    return program;
-}
-
-GLuint ogl_buffer_create(GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
-    GLuint buffer;
-
-    glGenBuffers(1, &buffer);
-    glBindBuffer(target, buffer);
-    glBufferData(target, size, data, usage);
-    glBindBuffer(target, 0);
-
-    return buffer;
-}
-
-void ogl_buffer_attribute(GLenum target, GLuint buffer, GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer) {
-    glBindBuffer(target, buffer);
-    glEnableVertexAttribArray(index);
-    glVertexAttribPointer(index, size, type, normalized, stride, pointer);
-    glBindBuffer(target, 0);
-}
-
-#endif /* glad */
-
-#if 1 /* cglm */
-
-#include <cglm/cglm.h>
-
-void cglm_view_rotate(mat4 view, float value, vec3 axis) {
-    mat4 rotation_matrix;
-
-    glm_mat4_copy(view, rotation_matrix);
-    glm_rotate_make(view, value, axis);
-    glm_mul(view, rotation_matrix, view);
-}
-
-void cglm_view_move_up(mat4 view, float value) {
-    float yaw = -90.0f;
-    float pitch = 1.0f;
-    vec3 front = {
-        cosf(glm_rad(yaw)) * cosf(glm_rad(pitch)),
-        sinf(glm_rad(pitch)),
-        sinf(glm_rad(yaw)) * cosf(glm_rad(pitch))
-    };
-
-    glm_vec3_normalize(front);
-
-    view[3][0] += glm_rad(front[1]) * value;
-    view[3][1] += glm_rad(front[2]) * value;
-    view[3][2] += glm_rad(front[0]) * value;
-}
-
-void cglm_view_move(vec3 axis, mat4 view, float value) {
-    float yaw = -90.0f;
-    float pitch = 1.0f;
-    vec3 front = {
-        cosf(glm_rad(yaw)) * cosf(glm_rad(pitch)),
-        sinf(glm_rad(pitch)),
-        sinf(glm_rad(yaw)) * cosf(glm_rad(pitch))
-    };
-
-    glm_vec3_normalize(front);
-    glm_vec3_cross(front, axis, front);
-    glm_vec3_normalize(front);
-
-    view[3][0] += glm_rad(front[1]) * value;
-    view[3][1] += glm_rad(front[2]) * value;
-    view[3][2] += glm_rad(front[0]) * value;
-}
-
-#endif /* cglm */
-
-#if 1 /* FFmpeg */
+#if 1 /* FFmpeg additional */
 
 int ffmpeg_get_next_frame(AVFormatContext* format_context, AVPacket* packet, int stream_index, AVCodecContext* codec_context, AVFrame* frame) {
     int result;
@@ -519,7 +285,394 @@ int ffmpeg_image_load_from_memory(void* data, size_t size, enum AVPixelFormat pi
     return result;
 }
 
-#endif /* FFmpeg */
+#endif /* FFmpeg additional */
+
+#if 1 /* FFmpeg video */
+
+typedef struct ffmpeg_video_data {
+    AVFormatContext* format_context;
+    AVCodecContext* codec_context;
+    struct SwsContext* sws_context;
+    AVPacket* packet;
+    AVFrame* frame;
+    int stream_index;
+    int result;
+} ffmpeg_video_data_t;
+
+ffmpeg_video_data_t ffmpeg_video_data_alloc(const char* url, enum AVPixelFormat pixel_format) {
+    ffmpeg_video_data_t ffmpeg_video_data = {
+        .format_context = NULL,
+        .codec_context = NULL,
+        .sws_context = NULL,
+        .packet = NULL,
+        .frame = NULL,
+        .stream_index = AVERROR_STREAM_NOT_FOUND,
+        .result = 0
+    };
+
+    if ((ffmpeg_video_data.result = ffmpeg_format_context_alloc(&ffmpeg_video_data.format_context, url, AVMEDIA_TYPE_VIDEO, &ffmpeg_video_data.stream_index)) == 0) {
+        if ((ffmpeg_video_data.result = ffmpeg_codec_context_alloc(&ffmpeg_video_data.codec_context, ffmpeg_video_data.format_context->streams[ffmpeg_video_data.stream_index]->codecpar, NULL)) == 0) {
+            if ((ffmpeg_video_data.result = ffmpeg_video_context_alloc(&ffmpeg_video_data.sws_context, ffmpeg_video_data.codec_context, pixel_format)) == 0) {
+                if ((ffmpeg_video_data.packet = av_packet_alloc()) != NULL) {
+                    if ((ffmpeg_video_data.frame = av_frame_alloc()) != NULL) {
+                        return ffmpeg_video_data;
+
+                        av_frame_free(&ffmpeg_video_data.frame);
+                    }
+                    else {
+                        ffmpeg_video_data.result = AVERROR(ENOMEM);
+                    }
+
+                    av_packet_free(&ffmpeg_video_data.packet);
+                }
+                else {
+                    ffmpeg_video_data.result = AVERROR(ENOMEM);
+                }
+
+                sws_freeContext(ffmpeg_video_data.sws_context);
+                ffmpeg_video_data.sws_context = NULL;
+            }
+
+            avcodec_free_context(&ffmpeg_video_data.codec_context);
+        }
+
+        avformat_close_input(&ffmpeg_video_data.format_context);
+    }
+
+    return ffmpeg_video_data;
+}
+
+void ffmpeg_video_data_free(ffmpeg_video_data_t* ffmpeg_video_data) {
+    ffmpeg_video_data->result = 0;
+    ffmpeg_video_data->stream_index = AVERROR_STREAM_NOT_FOUND;
+    av_frame_free(&ffmpeg_video_data->frame);
+    av_packet_free(&ffmpeg_video_data->packet);
+    sws_freeContext(ffmpeg_video_data->sws_context);
+    ffmpeg_video_data->sws_context = NULL;
+    avcodec_free_context(&ffmpeg_video_data->codec_context);
+    avformat_close_input(&ffmpeg_video_data->format_context);
+}
+
+#endif /* FFmpeg video */
+
+#if 1 /* FFmpeg audio */
+
+typedef struct ffmpeg_audio_data {
+    AVFormatContext* format_context;
+    AVCodecContext* codec_context;
+    struct SwrContext* swr_context;
+    AVPacket* packet;
+    AVFrame* frame;
+    int stream_index;
+    int result;
+} ffmpeg_audio_data_t;
+
+ffmpeg_audio_data_t ffmpeg_audio_data_alloc(const char* url, enum AVSampleFormat sample_format) {
+    ffmpeg_audio_data_t ffmpeg_audio_data = {
+        .format_context = NULL,
+        .codec_context = NULL,
+        .swr_context = NULL,
+        .packet = NULL,
+        .frame = NULL,
+        .stream_index = AVERROR_STREAM_NOT_FOUND,
+        .result = 0
+    };
+
+    if ((ffmpeg_audio_data.result = ffmpeg_format_context_alloc(&ffmpeg_audio_data.format_context, url, AVMEDIA_TYPE_AUDIO, &ffmpeg_audio_data.stream_index)) == 0) {
+        if ((ffmpeg_audio_data.result = ffmpeg_codec_context_alloc(&ffmpeg_audio_data.codec_context, ffmpeg_audio_data.format_context->streams[ffmpeg_audio_data.stream_index]->codecpar, NULL)) == 0) {
+            if ((ffmpeg_audio_data.result = ffmpeg_audio_context_alloc(&ffmpeg_audio_data.swr_context, ffmpeg_audio_data.codec_context, sample_format)) == 0) {
+                if ((ffmpeg_audio_data.packet = av_packet_alloc()) != NULL) {
+                    if ((ffmpeg_audio_data.frame = av_frame_alloc()) != NULL) {
+                        return ffmpeg_audio_data;
+
+                        av_frame_free(&ffmpeg_audio_data.frame);
+                    }
+                    else {
+                        ffmpeg_audio_data.result = AVERROR(ENOMEM);
+                    }
+
+                    av_packet_free(&ffmpeg_audio_data.packet);
+                }
+                else {
+                    ffmpeg_audio_data.result = AVERROR(ENOMEM);
+                }
+
+                swr_free(&ffmpeg_audio_data.swr_context);
+            }
+
+            avcodec_free_context(&ffmpeg_audio_data.codec_context);
+        }
+
+        avformat_close_input(&ffmpeg_audio_data.format_context);
+    }
+
+    return ffmpeg_audio_data;
+}
+
+void ffmpeg_audio_data_free(ffmpeg_audio_data_t* ffmpeg_audio_data) {
+    ffmpeg_audio_data->result = 0;
+    ffmpeg_audio_data->stream_index = AVERROR_STREAM_NOT_FOUND;
+    av_frame_free(&ffmpeg_audio_data->frame);
+    av_packet_free(&ffmpeg_audio_data->packet);
+    swr_free(&ffmpeg_audio_data->swr_context);
+    avcodec_free_context(&ffmpeg_audio_data->codec_context);
+    avformat_close_input(&ffmpeg_audio_data->format_context);
+}
+
+#endif /* FFmpeg audio */
+
+#if 1 /* stb_image */
+
+#define STBI_NO_SIMD
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
+#endif /* stb_image */
+
+#if 1 /* cglm */
+
+#include <cglm/cglm.h>
+
+void cglm_view_rotate(mat4 view, float value, vec3 axis) {
+    mat4 rotation_matrix;
+
+    glm_mat4_copy(view, rotation_matrix);
+    glm_rotate_make(view, value, axis);
+    glm_mul(view, rotation_matrix, view);
+}
+
+void cglm_view_move_up(mat4 view, float value) {
+    float yaw = -90.0f;
+    float pitch = 1.0f;
+    vec3 front = {
+        cosf(glm_rad(yaw)) * cosf(glm_rad(pitch)),
+        sinf(glm_rad(pitch)),
+        sinf(glm_rad(yaw)) * cosf(glm_rad(pitch))
+    };
+
+    glm_vec3_normalize(front);
+
+    view[3][0] += glm_rad(front[1]) * value;
+    view[3][1] += glm_rad(front[2]) * value;
+    view[3][2] += glm_rad(front[0]) * value;
+}
+
+void cglm_view_move(vec3 axis, mat4 view, float value) {
+    float yaw = -90.0f;
+    float pitch = 1.0f;
+    vec3 front = {
+        cosf(glm_rad(yaw)) * cosf(glm_rad(pitch)),
+        sinf(glm_rad(pitch)),
+        sinf(glm_rad(yaw)) * cosf(glm_rad(pitch))
+    };
+
+    glm_vec3_normalize(front);
+    glm_vec3_cross(front, axis, front);
+    glm_vec3_normalize(front);
+
+    view[3][0] += glm_rad(front[1]) * value;
+    view[3][1] += glm_rad(front[2]) * value;
+    view[3][2] += glm_rad(front[0]) * value;
+}
+
+#endif /* cglm */
+
+#if 1 /* miniaudio */
+
+#ifndef CP_UTF8
+    #define CP_UTF8 65001 /* miniaudio.h:21553: error: 'CP_UTF8' undeclared */
+#endif /* CP_UTF8 */
+
+#ifdef __APPLE__
+    #define MA_NO_RUNTIME_LINKING
+#endif /* __APPLE__ */
+
+// #define MA_NO_DECODING
+// #define MA_NO_ENCODING
+#define MA_NO_WAV
+#define MA_NO_FLAC
+#define MA_NO_MP3
+
+#define MINIAUDIO_IMPLEMENTATION
+#include <miniaudio.h>
+
+#endif /* miniaudio */
+
+#if 1 /* miniaudio & FFmpeg */
+
+#include <libavutil/time.h>
+
+void ma_data_callback(ma_device* device, void* output, const void* input, ma_uint32 frame_count) {
+    ffmpeg_audio_data_t* ffmpeg_audio_data = device->pUserData;
+
+    if ((ffmpeg_audio_data->result = ffmpeg_get_next_frame(ffmpeg_audio_data->format_context, ffmpeg_audio_data->packet, ffmpeg_audio_data->stream_index, ffmpeg_audio_data->codec_context, ffmpeg_audio_data->frame)) == 0) {
+        if ((ffmpeg_audio_data->result = swr_convert(ffmpeg_audio_data->swr_context, &output, frame_count, ffmpeg_audio_data->frame->data, ffmpeg_audio_data->frame->nb_samples)) >= 0) {
+            ffmpeg_audio_data->result = 0;
+        }
+    }
+}
+
+void ma_ffmpeg_start(const char* url) {
+    ffmpeg_audio_data_t ffmpeg_audio_data = ffmpeg_audio_data_alloc(url, AV_SAMPLE_FMT_S16);
+
+    if (ffmpeg_audio_data.result == 0) {
+        ma_result result;
+        ma_device_config device_config;
+        ma_device device;
+
+        device_config = ma_device_config_init(ma_device_type_playback);
+        device_config.sampleRate = ffmpeg_audio_data.codec_context->sample_rate;
+        device_config.periodSizeInFrames = ffmpeg_audio_data.codec_context->frame_size;
+        device_config.dataCallback = ma_data_callback;
+        device_config.pUserData = &ffmpeg_audio_data;
+        device_config.playback.format = ma_format_s16;
+        device_config.playback.channels = ffmpeg_audio_data.codec_context->ch_layout.nb_channels;
+
+        if ((result = ma_device_init(NULL, &device_config, &device)) == MA_SUCCESS) {
+            if ((result = ma_device_start(&device)) == MA_SUCCESS) {
+                while (ffmpeg_audio_data.result != AVERROR_EOF) {
+                    av_usleep(10000);
+                }
+            }
+
+            ma_device_uninit(&device);
+        }
+
+        ffmpeg_audio_data_free(&ffmpeg_audio_data);
+    }
+}
+
+#endif /* miniaudio & FFmpeg */
+
+#if 1 /* curl */
+
+#define __MINGW32__ /* tcc: curl/system.h:464: error: ';' expected (got "curl_socklen_t") */
+    #include <curl/curl.h>
+#undef __MINGW32__
+
+size_t curl_write_function_callback(void* data, size_t size, size_t nmemb, void** out_data) {
+    void* reallocated_data;
+    size_t data_size;
+
+    data_size = out_data[0] ? *(size_t*)out_data[0] : 0;
+
+    if ((reallocated_data = realloc(out_data[0], size * nmemb + sizeof(size_t) + data_size)) != NULL) {
+        out_data[0] = reallocated_data;
+        memcpy(out_data[0] + sizeof(size_t) + data_size, data, size * nmemb);
+        *(size_t*)out_data[0] = size * nmemb + data_size;
+    }
+    else {
+        return 0;
+    }
+
+    return size * nmemb;
+}
+
+/**
+ * @note First "sizeof(size_t)" in "out_data" - data size.
+ */
+CURLcode curl_get_url_data(const char* url, void** out_data, long timeout_ms) {
+    CURLcode curl_code;
+
+    if ((curl_code = curl_global_init(CURL_GLOBAL_ALL)) == CURLE_OK) {
+        CURL* curl;
+
+        if ((curl = curl_easy_init()) != NULL) {
+            out_data[0] = NULL; /* This function should not do this. */
+
+            if (
+                (curl_code = curl_easy_setopt(curl, CURLOPT_URL, url)) == CURLE_OK &&
+                (curl_code = curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_function_callback)) == CURLE_OK &&
+                (curl_code = curl_easy_setopt(curl, CURLOPT_WRITEDATA, out_data)) == CURLE_OK &&
+                (curl_code = curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout_ms)) == CURLE_OK &&
+                (curl_code = curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0)) == CURLE_OK &&
+                (curl_code = curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1)) == CURLE_OK &&
+                (curl_code = curl_easy_setopt(curl, CURLOPT_USERAGENT, "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0")) == CURLE_OK
+            ) {
+                curl_code = curl_easy_perform(curl);
+            }
+
+            curl_easy_cleanup(curl);
+        }
+        else {
+            curl_code = CURLE_FAILED_INIT;
+        }
+
+        curl_global_cleanup();
+    }
+
+    return curl_code;
+}
+
+#endif /* curl */
+
+#if 1 /* libxml2 */
+
+#include <libxml/HTMLparser.h>
+
+xmlNode* xml_node_find(xmlNode* node, const xmlChar* node_name, const xmlChar* prop_name, const xmlChar* prop_value, const xmlChar* node_content) {
+    while (node != NULL) {
+        if (node->type == XML_ELEMENT_NODE) {
+            int is_this = 1;
+
+            if (node_name != NULL) {
+                if (xmlStrcmp(node->name, node_name) != 0) {
+                    is_this = 0;
+                }
+            }
+
+            xmlChar* prop_data = NULL;
+
+            if (prop_name != NULL && is_this == 1) {
+                if ((prop_data = xmlGetProp(node, prop_name)) == NULL) { /* Do not forget to free up memory after xmlGetProp. */
+                    is_this = 0;
+                }
+            }
+
+            if (prop_value != NULL && is_this == 1) {
+                if (prop_data != NULL) {
+                    if (xmlStrcmp(prop_data, prop_value) != 0) {
+                        is_this = 0;
+                    }
+                }
+            }
+
+            if (prop_data != NULL) {
+                xmlFree(prop_data);
+            }
+
+            if (node_content != NULL && is_this == 1) {
+                xmlChar* content;
+
+                is_this = 0;
+
+                if ((content = xmlNodeGetContent(node)) != NULL) { /* Do not forget to free up memory after xmlNodeGetContent. */
+                    if (xmlStrstr(content, node_content) != NULL) {
+                        is_this = 1;
+                    }
+
+                    xmlFree(content);
+                }
+            }
+
+            if (is_this == 1) {
+                return node;
+            }
+        }
+
+        xmlNode* result;
+
+        if ((result = xml_node_find(node->children, node_name, prop_name, prop_value, node_content)) != NULL) {
+            return result;
+        }
+
+        node = node->next;
+    }
+
+    return NULL;
+}
+
+#endif /* libxml2 */
 
 #if 1 /* Random 18+ video/image */
 
@@ -634,7 +787,7 @@ void xml_rule34_xxx_get_base_url_and_pid(char** out_url_to_list, int* out_pid_co
     }
 
     if ((document = xml_get_url_data(url, 20000)) != NULL) {
-        if ((node = xml_find(xmlDocGetRootElement(document), "a", "alt", "last page", NULL)) != NULL) {
+        if ((node = xml_node_find(xmlDocGetRootElement(document), "a", "alt", "last page", NULL)) != NULL) {
             if ((buffer = xmlGetProp(node, "href")) != NULL) { /* Do not forget to free up memory after xmlGetProp. */
                 if ((pid_string = strrchr(buffer, '=')) != NULL) {
                     ++pid_string;
@@ -645,7 +798,7 @@ void xml_rule34_xxx_get_base_url_and_pid(char** out_url_to_list, int* out_pid_co
                     xmlFreeDoc(document);
 
                     if ((document = xml_get_url_data(url, 20000)) != NULL) {
-                        if ((node = xml_find(xmlDocGetRootElement(document), "div", "class", "image-list", NULL)) != NULL) {
+                        if ((node = xml_node_find(xmlDocGetRootElement(document), "div", "class", "image-list", NULL)) != NULL) {
                             out_pid_count[0] += xmlChildElementCount(node);
                         }
                     }
@@ -655,7 +808,7 @@ void xml_rule34_xxx_get_base_url_and_pid(char** out_url_to_list, int* out_pid_co
             }
         }
         else {
-            if ((node = xml_find(xmlDocGetRootElement(document), "div", "class", "image-list", NULL)) != NULL) {
+            if ((node = xml_node_find(xmlDocGetRootElement(document), "div", "class", "image-list", NULL)) != NULL) {
                 out_pid_count[0] = xmlChildElementCount(node);
             }
         }
@@ -675,17 +828,17 @@ void xml_rule34_xxx_get_source_url(const char* url_to_list, int pid, char** out_
     snprintf(url, sizeof(url), "%s&pid=%i", url_to_list, pid);
 
     if ((document = xml_get_url_data(url, 20000)) != NULL) {
-        if ((node = xml_find(xmlDocGetRootElement(document), "div", "class", "image-list", NULL)) != NULL) {
-            if ((node = xml_find(node, "span", "class", "thumb", NULL)) != NULL) {
-                if ((node = xml_find(node, "a", "href", NULL, NULL)) != NULL) {
+        if ((node = xml_node_find(xmlDocGetRootElement(document), "div", "class", "image-list", NULL)) != NULL) {
+            if ((node = xml_node_find(node, "span", "class", "thumb", NULL)) != NULL) {
+                if ((node = xml_node_find(node, "a", "href", NULL, NULL)) != NULL) {
                     if ((buffer = xmlGetProp(node, "href")) != NULL) { /* Do not forget to free up memory after xmlGetProp. */
                         snprintf(url, sizeof(url), "%s%s", "https://rule34.xxx", buffer);
 
                         xmlFreeDoc(document);
 
                         if ((document = xml_get_url_data(url, 20000)) != NULL) {
-                            if ((node = xml_find(xmlDocGetRootElement(document), "li", NULL, NULL, "Original image")) != NULL) {
-                                if ((node = xml_find(node, "a", "href", NULL, NULL)) != NULL) {
+                            if ((node = xml_node_find(xmlDocGetRootElement(document), "li", NULL, NULL, "Original image")) != NULL) {
+                                if ((node = xml_node_find(node, "a", "href", NULL, NULL)) != NULL) {
                                     out_url[0] = xmlGetProp(node, "href"); /* Do not forget to free up memory after xmlGetProp. */
                                 }
                             }
@@ -704,8 +857,8 @@ void xml_rule34_xxx_get_source_url(const char* url_to_list, int pid, char** out_
 
     if (out_url[0] == NULL) {
         if ((document = xml_get_url_data("https://rule34.xxx/index.php?page=post&s=random", 20000)) != NULL) {
-            if ((node = xml_find(xmlDocGetRootElement(document), "li", NULL, NULL, "Original image")) != NULL) {
-                if ((node = xml_find(node, "a", "href", NULL, NULL)) != NULL) {
+            if ((node = xml_node_find(xmlDocGetRootElement(document), "li", NULL, NULL, "Original image")) != NULL) {
+                if ((node = xml_node_find(node, "a", "href", NULL, NULL)) != NULL) {
                     out_url[0] = xmlGetProp(node, "href"); /* Do not forget to free up memory after xmlGetProp. */
                 }
             }
@@ -741,7 +894,7 @@ void xml_realbooru_com_get_base_url_and_pid(char** out_url_to_list, int* out_pid
     }
 
     if ((document = xml_get_url_data(url, 20000)) != NULL) {
-        if ((node = xml_find(xmlDocGetRootElement(document), "a", "alt", "last page", NULL)) != NULL) {
+        if ((node = xml_node_find(xmlDocGetRootElement(document), "a", "alt", "last page", NULL)) != NULL) {
             if ((buffer = xmlGetProp(node, "href")) != NULL) { /* Do not forget to free up memory after xmlGetProp. */
                 if ((pid_string = strrchr(buffer, '=')) != NULL) {
                     ++pid_string;
@@ -752,7 +905,7 @@ void xml_realbooru_com_get_base_url_and_pid(char** out_url_to_list, int* out_pid
                     xmlFreeDoc(document);
 
                     if ((document = xml_get_url_data(url, 20000)) != NULL) {
-                        if ((node = xml_find(xmlDocGetRootElement(document), "div", "class", "items", NULL)) != NULL) {
+                        if ((node = xml_node_find(xmlDocGetRootElement(document), "div", "class", "items", NULL)) != NULL) {
                             out_pid_count[0] += xmlChildElementCount(node);
                         }
                     }
@@ -762,7 +915,7 @@ void xml_realbooru_com_get_base_url_and_pid(char** out_url_to_list, int* out_pid
             }
         }
         else {
-            if ((node = xml_find(xmlDocGetRootElement(document), "div", "class", "items", NULL)) != NULL) {
+            if ((node = xml_node_find(xmlDocGetRootElement(document), "div", "class", "items", NULL)) != NULL) {
                 out_pid_count[0] = xmlChildElementCount(node);
             }
         }
@@ -782,22 +935,22 @@ void xml_realbooru_com_get_source_url(const char* url_to_list, int pid, char** o
     snprintf(url, sizeof(url), "%s&pid=%i", url_to_list, pid);
 
     if ((document = xml_get_url_data(url, 20000)) != NULL) {
-        if ((node = xml_find(xmlDocGetRootElement(document), "div", "class", "items", NULL)) != NULL) {
-            if ((node = xml_find(node, "div", "class", "col thumb", NULL)) != NULL) {
-                if ((node = xml_find(node, "a", "href", NULL, NULL)) != NULL) {
+        if ((node = xml_node_find(xmlDocGetRootElement(document), "div", "class", "items", NULL)) != NULL) {
+            if ((node = xml_node_find(node, "div", "class", "col thumb", NULL)) != NULL) {
+                if ((node = xml_node_find(node, "a", "href", NULL, NULL)) != NULL) {
                     if ((buffer = xmlGetProp(node, "href")) != NULL) { /* Do not forget to free up memory after xmlGetProp. */
                         snprintf(url, sizeof(url), "%s", buffer);
 
                         xmlFreeDoc(document);
 
                         if ((document = xml_get_url_data(url, 20000)) != NULL) {
-                            if ((node = xml_find(xmlDocGetRootElement(document), "video", "id", "gelcomVideoPlayer", NULL)) != NULL) {
-                                if ((node = xml_find(node, "source", "src", NULL, NULL)) != NULL) {
+                            if ((node = xml_node_find(xmlDocGetRootElement(document), "video", "id", "gelcomVideoPlayer", NULL)) != NULL) {
+                                if ((node = xml_node_find(node, "source", "src", NULL, NULL)) != NULL) {
                                     out_url[0] = xmlGetProp(node, "src"); /* Do not forget to free up memory after xmlGetProp. */
                                 }
                             }
-                            else if ((node = xml_find(xmlDocGetRootElement(document), "div", "class", "imageContainer", NULL)) != NULL) {
-                                if ((node = xml_find(node, "img", "id", "image", NULL)) != NULL) {
+                            else if ((node = xml_node_find(xmlDocGetRootElement(document), "div", "class", "imageContainer", NULL)) != NULL) {
+                                if ((node = xml_node_find(node, "img", "id", "image", NULL)) != NULL) {
                                     out_url[0] = xmlGetProp(node, "src"); /* Do not forget to free up memory after xmlGetProp. */
                                 }
                             }
@@ -816,8 +969,8 @@ void xml_realbooru_com_get_source_url(const char* url_to_list, int pid, char** o
 
     if (out_url[0] == NULL) {
         if ((document = xml_get_url_data("https://realbooru.com/index.php?page=post&s=random", 20000)) != NULL) {
-            if ((node = xml_find(xmlDocGetRootElement(document), "li", NULL, NULL, "Original image")) != NULL) {
-                if ((node = xml_find(node, "a", "href", NULL, NULL)) != NULL) {
+            if ((node = xml_node_find(xmlDocGetRootElement(document), "li", NULL, NULL, "Original image")) != NULL) {
+                if ((node = xml_node_find(node, "a", "href", NULL, NULL)) != NULL) {
                     out_url[0] = xmlGetProp(node, "href"); /* Do not forget to free up memory after xmlGetProp. */
                 }
             }
@@ -829,110 +982,130 @@ void xml_realbooru_com_get_source_url(const char* url_to_list, int pid, char** o
 
 #endif /* Random 18+ video/image */
 
-#if 1 /* PortAudio */
+#if 1 /* cJSON */
 
-#include <portaudio.h>
+#include <cJSON.h>
 
-typedef struct ffmpeg_audio_data {
-    AVFormatContext* format_context;
-    AVCodecContext* codec_context;
-    struct SwrContext* swr_context;
-    AVPacket* packet;
-    AVFrame* frame;
-    int stream_index;
-    int result;
-} ffmpeg_audio_data_t;
+void cjson_find(cJSON* node) {
+    static uint32_t G_CJSON_COUNT;
 
-int pa_output_stream_callback(const void* input_buffer, void* output_buffer, unsigned long frames_per_buffer, const PaStreamCallbackTimeInfo* time_info, PaStreamCallbackFlags status_flags, void* user_data) {
-    ffmpeg_audio_data_t* ffmpeg_audio_data = user_data;
+    while (node) {
+        if (node->type == cJSON_Array) {
+            printf("%*c\"%s\": [\n", G_CJSON_COUNT, ' ', node->string);
+        }
+        if (node->type == cJSON_String) {
+            printf("%*c\"%s\": \"%s\"\n", G_CJSON_COUNT, ' ', node->string, node->valuestring);
+        }
+        if (node->type == cJSON_Number) {
+            printf("%*c\"%s\": %f\n", G_CJSON_COUNT, ' ', node->string, node->valuedouble);
+        }
 
-    if ((ffmpeg_audio_data->result = ffmpeg_get_next_frame(ffmpeg_audio_data->format_context, ffmpeg_audio_data->packet, ffmpeg_audio_data->stream_index, ffmpeg_audio_data->codec_context, ffmpeg_audio_data->frame)) == 0) {
-        if ((ffmpeg_audio_data->result = swr_convert(ffmpeg_audio_data->swr_context, &output_buffer, frames_per_buffer, ffmpeg_audio_data->frame->extended_data, ffmpeg_audio_data->frame->nb_samples)) >= 0) {
-            ffmpeg_audio_data->result = 0;
+        if (node->child != NULL) {
+            G_CJSON_COUNT += 4;
+            cjson_find(node->child);
+            G_CJSON_COUNT -= 4;
+        }
 
-            for (unsigned long i = 0; i < frames_per_buffer * ffmpeg_audio_data->codec_context->ch_layout.nb_channels; ++i) {
-                ((int16_t*)output_buffer)[i] *= 0.1f;
-            }
+        if (node->type == cJSON_Array) {
+            printf("%*c]\n", G_CJSON_COUNT, ' ');
+        }
 
-            return paContinue;
+        node = node->next;
+    }
+}
+
+#endif /* cJSON */
+
+#if 1 /* glad */
+
+#define GLAD_GL_IMPLEMENTATION
+#include <glad/gl.h>
+
+void ogl_debug_message_callback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* user_param) {
+    PRINT_TEXT(message);
+}
+
+/**
+ * @return OpenGL version.
+ */
+int ogl_initialize(GLboolean enable_debug) {
+    int version;
+
+    if ((version = gladLoaderLoadGL()) > 0) {
+        if (enable_debug == GL_TRUE && GLAD_VERSION_MAJOR(version) == 4 && GLAD_VERSION_MINOR(version) >= 3) {
+            glDebugMessageCallback(ogl_debug_message_callback, NULL);
+            glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, GL_TRUE);
         }
     }
 
-    return ffmpeg_audio_data->result == AVERROR_EOF ? paComplete : paAbort;
+    return version;
 }
 
-int audio_play(const char* url) {
-    ffmpeg_audio_data_t ffmpeg_audio_data = {
-        .format_context = NULL,
-        .codec_context = NULL,
-        .swr_context = NULL,
-        .packet = NULL,
-        .frame = NULL,
-        .stream_index = AVERROR_STREAM_NOT_FOUND,
-        .result = 0
-    };
+GLuint ogl_texture_create(GLenum target, GLint mag_filter, GLint min_filter, GLint wrap_s, GLint wrap_t, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
+    GLuint texture;
 
-    if ((ffmpeg_audio_data.result = ffmpeg_format_context_alloc(&ffmpeg_audio_data.format_context, url, AVMEDIA_TYPE_AUDIO, &ffmpeg_audio_data.stream_index)) == 0) {
-        if ((ffmpeg_audio_data.result = ffmpeg_codec_context_alloc(&ffmpeg_audio_data.codec_context, ffmpeg_audio_data.format_context->streams[ffmpeg_audio_data.stream_index]->codecpar, NULL)) == 0) {
-            if ((ffmpeg_audio_data.result = ffmpeg_audio_context_alloc(&ffmpeg_audio_data.swr_context, ffmpeg_audio_data.codec_context, AV_SAMPLE_FMT_S16)) == 0) {
-                if ((ffmpeg_audio_data.packet = av_packet_alloc()) != NULL) {
-                    if ((ffmpeg_audio_data.frame = av_frame_alloc()) != NULL) {
-                        PaError error;
+    glGenTextures(1, &texture);
 
-                        if ((error = Pa_Initialize()) == paNoError) {
-                            PaStream* stream;
-                            PaStreamParameters output_stream_parameters = {
-                                .device = Pa_GetDefaultOutputDevice(),
-                                .channelCount = ffmpeg_audio_data.codec_context->ch_layout.nb_channels,
-                                .sampleFormat = paInt16,
-                                .suggestedLatency = Pa_GetDeviceInfo(Pa_GetDefaultOutputDevice())->defaultHighOutputLatency,
-                                .hostApiSpecificStreamInfo = NULL
-                            };
-
-                            if ((error = Pa_OpenStream(&stream, NULL, &output_stream_parameters, ffmpeg_audio_data.codec_context->sample_rate, ffmpeg_audio_data.codec_context->frame_size, paNoFlag, pa_output_stream_callback, &ffmpeg_audio_data)) == paNoError) {
-                                if ((error = Pa_StartStream(stream)) == paNoError) {
-                                    while (Pa_IsStreamActive(stream) == 1) {
-                                        Pa_Sleep(100);
-                                    }
-
-                                    /* error = */ Pa_CloseStream(stream);
-                                }
-                            }
-
-                            /* error = */ Pa_Terminate();
-                        }
-
-                        if (error != paNoError) {
-                            PRINT_TEXT(Pa_GetErrorText(error));
-                        }
-
-                        av_frame_free(&ffmpeg_audio_data.frame);
-                    }
-                    else {
-                        ffmpeg_audio_data.result = AVERROR(ENOMEM);
-                    }
-
-                    av_packet_free(&ffmpeg_audio_data.packet);
-                }
-                else {
-                    ffmpeg_audio_data.result = AVERROR(ENOMEM);
-                }
-
-                swr_free(&ffmpeg_audio_data.swr_context);
-            }
-
-            avcodec_free_context(&ffmpeg_audio_data.codec_context);
-        }
-
-        avformat_close_input(&ffmpeg_audio_data.format_context);
+    if (texture > 0) {
+        glBindTexture(target, texture);
+        glTexParameteri(target, GL_TEXTURE_MAG_FILTER, mag_filter);
+        glTexParameteri(target, GL_TEXTURE_MIN_FILTER, min_filter);
+        glTexParameteri(target, GL_TEXTURE_WRAP_S, wrap_s);
+        glTexParameteri(target, GL_TEXTURE_WRAP_T, wrap_t);
+        glTexImage2D(target, 0, format, width, height, 0, format, type, pixels);
+        glGenerateMipmap(target);
+        glBindTexture(target, 0);
     }
 
-    return ffmpeg_audio_data.result;
+    return texture;
 }
 
-#endif /* PortAudio */
+GLuint ogl_shader_create(GLenum type, GLsizei count, const GLchar* const* string, const GLint* length) {
+    GLuint shader;
 
-#if 1 /* cgltf to OpenGL */
+    if ((shader = glCreateShader(type)) > 0) {
+        glShaderSource(shader, count, string, length);
+        glCompileShader(shader);
+    }
+
+    return shader;
+}
+
+GLuint ogl_program_create(GLuint count, GLuint* shaders) {
+    GLuint program;
+
+    if ((program = glCreateProgram()) > 0) {
+        for (GLuint i = 0; i < count; ++i) {
+            glAttachShader(program, shaders[i]);
+        }
+
+        glLinkProgram(program);
+    }
+
+    return program;
+}
+
+GLuint ogl_buffer_create(GLenum target, GLsizeiptr size, const void* data, GLenum usage) {
+    GLuint buffer;
+
+    glGenBuffers(1, &buffer);
+    glBindBuffer(target, buffer);
+    glBufferData(target, size, data, usage);
+    glBindBuffer(target, 0);
+
+    return buffer;
+}
+
+void ogl_buffer_attribute(GLenum target, GLuint buffer, GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer) {
+    glBindBuffer(target, buffer);
+    glEnableVertexAttribArray(index);
+    glVertexAttribPointer(index, size, type, normalized, stride, pointer);
+    glBindBuffer(target, 0);
+}
+
+#endif /* glad */
+
+#if 1 /* cgltf */
 
 #define CGLTF_IMPLEMENTATION
 #include <cgltf/cgltf.h>
@@ -976,6 +1149,9 @@ void* cgltf_accessor_alloc_and_parse_data(const cgltf_accessor* accessor) {
     return data;
 }
 
+#endif /* cgltf */
+
+#if 1 /* cgltf to OpenGL */
 
 typedef struct transform {
     vec3 position;
@@ -1126,26 +1302,41 @@ int cgltf_image_parse(const cgltf_image* image, const char* path_to_folder, uint
                 };
 
                 if (cgltf_load_buffer_base64(&options, size, base64, &data) == cgltf_result_success) {
-                    result = ffmpeg_image_load_from_memory(data, image->buffer_view->size, AV_PIX_FMT_RGBA, out_pixels, out_width, out_height);
+                    // result = ffmpeg_image_load_from_memory(data, image->buffer_view->size, AV_PIX_FMT_RGBA, out_pixels, out_width, out_height);
+
+                    if ((out_pixels[0] = stbi_load_from_memory(data, image->buffer_view->size, out_width, out_height, NULL, STBI_rgb_alpha)) == NULL) {
+                        result = -1;
+                    }
+                }
+                else {
+                    result = -1;
                 }
             }
         }
         else {
             if (path_to_folder == NULL) {
                 puts("path_to_folder is NULL!");
-                return AVERROR(ENOMEM);
-            }
-
-            char* image_path;
-
-            if ((image_path = malloc(strlen(path_to_folder) + strlen(image->uri) + 1)) != NULL) {
-                strcpy(image_path, path_to_folder);
-                strcat(image_path, image->uri);
-                result = ffmpeg_image_load_from_url(image_path, AV_PIX_FMT_RGBA, out_pixels, out_width, out_height);
-                free(image_path);
+                // return AVERROR(ENOMEM);
+                result = -1;
             }
             else {
-                result = AVERROR(ENOMEM);
+                char* image_path;
+
+                if ((image_path = malloc(strlen(path_to_folder) + strlen(image->uri) + 1)) != NULL) {
+                    strcpy(image_path, path_to_folder);
+                    strcat(image_path, image->uri);
+                    // result = ffmpeg_image_load_from_url(image_path, AV_PIX_FMT_RGBA, out_pixels, out_width, out_height);
+
+                    if ((out_pixels[0] = stbi_load(image_path, out_width, out_height, NULL, STBI_rgb_alpha)) == NULL) {
+                        result = -1;
+                    }
+
+                    free(image_path);
+                }
+                else {
+                    // result = AVERROR(ENOMEM);
+                    result = errno;
+                }
             }
         }
     }
@@ -1161,11 +1352,17 @@ int cgltf_image_parse(const cgltf_image* image, const char* path_to_folder, uint
                 offset += stride;
             }
 
-            result = ffmpeg_image_load_from_memory(data, image->buffer_view->size, AV_PIX_FMT_RGBA, out_pixels, out_width, out_height);
+            // result = ffmpeg_image_load_from_memory(data, image->buffer_view->size, AV_PIX_FMT_RGBA, out_pixels, out_width, out_height);
+
+            if ((out_pixels[0] = stbi_load_from_memory(data, image->buffer_view->size, out_width, out_height, NULL, STBI_rgb_alpha)) == NULL) {
+                result = -1;
+            }
+
             free(data);
         }
         else {
-            result = AVERROR(ENOMEM);
+            // result = AVERROR(ENOMEM);
+            result = errno;
         }
     }
 
@@ -1243,10 +1440,12 @@ void cgltf_material_to_ogl_material(const cgltf_material* material, ogl_material
                         GL_UNSIGNED_BYTE,
                         pixels
                     );
-                    av_freep(&pixels);
+
+                    free(pixels);
                 }
                 else {
-                    PRINT_TEXT(av_err2str(result));
+                    // PRINT_TEXT(av_err2str(result));
+                    PRINT_TEXT(strerror(result));
                 }
             }
         }
@@ -1561,6 +1760,7 @@ void ogl_scene_draw(const ogl_scene_t* scene, mat4 projection, mat4 view, vec4 p
 }
 
 #if 0
+
 void ogl_node_parse(const cgltf_node* node, ogl_node_t* out_node) {
     out_node->name = strdup(node->name);
 
@@ -1715,6 +1915,7 @@ void ogl_scene_draw(const ogl_scene_t* scene, mat4 projection, mat4 view) {
         ogl_draw_node(&scene->nodes[i], projection, view, planes);
     }
 }
+
 #endif
 
 #endif /* cgltf to OpenGL */
@@ -1724,7 +1925,7 @@ void ogl_scene_draw(const ogl_scene_t* scene, mat4 projection, mat4 view) {
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
-GLboolean something_strange(GLFWwindow* window) {
+GLboolean something_disgusting(GLFWwindow* window) {
     static int initialized;
     static mat4 projection;
     static mat4 view = GLM_MAT4_IDENTITY_INIT;
@@ -1750,11 +1951,6 @@ GLboolean something_strange(GLFWwindow* window) {
         // cgltf_to_ogl("https://github.com/KhronosGroup/glTF-Sample-Models/raw/main/2.0/Corset/glTF-Binary/Corset.glb", &scene);
 
         initialized = 1;
-    }
-
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-        glfwSetWindowShouldClose(window, GLFW_TRUE);
-        return GL_FALSE;
     }
 
     glfwGetWindowSize(window, &window_width, &window_height);
@@ -1832,19 +2028,19 @@ GLboolean something_strange(GLFWwindow* window) {
         }
 
         static mat4 projection_view;
-        static vec4 planes[6];
-
         glm_mat4_mul(projection, view, projection_view);
+
+        static vec4 planes[6];
         glm_frustum_planes(projection_view, planes);
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // ogl_scene_draw(&scene, projection, view, planes);
+        ogl_scene_draw(&scene, projection, view, planes);
 
-        glfwSwapBuffers(window);
+        return GL_TRUE;
     }
 
-    return GL_TRUE;
+    return GL_FALSE;
 }
 
 void glfw_error_callback(int error_code, const char* description) {
@@ -1853,7 +2049,7 @@ void glfw_error_callback(int error_code, const char* description) {
 
 void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
-    glm_perspective(GLM_PI_4f, (float)width / height, 0.001f, FLT_MAX, glfwGetWindowUserPointer(window));
+    // glm_perspective(GLM_PI_4f, (float)width / height, 0.001f, FLT_MAX, glfwGetWindowUserPointer(window));
 }
 
 void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -1876,14 +2072,21 @@ void glfw_start() {
         GLFWwindow* window;
 
         if ((window = glfwCreateWindow(960, 540, "Project", NULL, NULL)) != NULL) {
+            // glfwSetWindowAttrib(window, GLFW_MOUSE_PASSTHROUGH, GLFW_TRUE);
+            // glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+            // glfwSetWindowAttrib(window, GLFW_FLOATING, GLFW_TRUE);
+
             glfwMakeContextCurrent(window);
             glfwSetFramebufferSizeCallback(window, glfw_framebuffer_size_callback);
             glfwSetKeyCallback(window, glfw_key_callback);
 
-            if (ogl_init(GL_TRUE) > 0) {
+            if (ogl_initialize(GL_TRUE) > 0) {
                 while (glfwWindowShouldClose(window) == GLFW_FALSE) {
                     glfwWaitEvents();
-                    something_strange(window);
+
+                    if (something_disgusting(window) == GL_TRUE) {
+                        glfwSwapBuffers(window);
+                    }
                 }
             }
 
@@ -1904,5 +2107,86 @@ void glfw_start() {
 
 
 int main(int argc, char** argv) {
+    ma_ffmpeg_start("https://ws-cdn-video.rule34.xxx//images/1440/f546248bdbee34cf8ea8632eab45a551.mp4?10937904");
+    glfw_start();
+
     return 0;
+
+#if 0
+    int result;
+    void* data;
+    size_t size;
+
+    if ((result = file_load("../data/main.json", &data, &size)) == 0) {
+        cJSON* root;
+
+        if ((root = cJSON_Parse(data)) != NULL) {
+            cjson_find(root);
+            cJSON_Delete(root);
+        }
+
+        free(data);
+    }
+    else {
+        PRINT_TEXT(strerror(result));
+    }
+
+    return 0;
+#endif
+
+#if 0
+    // "../../tcc/tcc" -run -I../include -I../include/winapi -I../include/libxml2 -L. -lavcodec-61 -lavformat-61 -lavutil-59 -lswresample-5 -lswscale-8 -lcurl-x64 -lxml2-2 -lglfw3 -lportaudio -luser32 main.c
+
+    glfwInit();
+    double t1;
+
+    DWORD milliseconds = 690;
+    BOOL is_clicking = FALSE;
+
+    puts("F1 - clicking on/off");
+    puts("F2 - exit");
+
+    while (TRUE) {
+        if (GetAsyncKeyState(VK_F2)) {
+            break;
+        }
+
+        if (GetAsyncKeyState(VK_F1)) {
+            is_clicking = is_clicking ? FALSE : TRUE;
+            t1 = glfwGetTime();
+
+            printf("Clicking is %s\n", is_clicking ? "on" : "off");
+
+            Sleep(200);
+        }
+
+        if (GetAsyncKeyState(VK_F3)) {
+            milliseconds += 5;
+        }
+
+        if (GetAsyncKeyState(VK_F4)) {
+            milliseconds -= 5;
+        }
+
+        if (is_clicking) {
+            // Sleep(1500);
+
+            // mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, NULL, 0);
+            // Sleep(5);
+            // mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, NULL, 0);
+
+            // Sleep(milliseconds);
+            // // Beep(500, 50);
+
+            // mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, NULL, 0);
+            // Sleep(5);
+            // mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, NULL, 0);
+            // Sleep(5);
+        }
+    }
+
+    printf("Last milliseconds: %i\n", milliseconds);
+
+    return 0;
+#endif
 }
