@@ -492,7 +492,6 @@ void cglm_view_move(vec3 axis, mat4 view, float value) {
 #define MA_NO_WAV
 #define MA_NO_FLAC
 #define MA_NO_MP3
-
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>
 
