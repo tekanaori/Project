@@ -207,6 +207,9 @@ int ffmpeg_from_memory_alloc(AVFormatContext** out_format_context, void* data, s
     return result;
 }
 
+/**
+ * @note Use av_freep(&out_pixels); to free data.
+ */
 int ffmpeg_image_parse(AVFormatContext* format_context, AVCodecContext* codec_context, int stream_index, enum AVPixelFormat pixel_format, uint8_t** out_pixels, int* out_width, int* out_height) {
     struct SwsContext* sws_context = NULL;
     AVPacket* packet;
@@ -297,6 +300,9 @@ typedef struct ffmpeg_video_data {
     AVFrame* frame;
     int stream_index;
     int result;
+
+    uint8_t* pixels[4];
+    int pitch[4];
 } ffmpeg_video_data_t;
 
 ffmpeg_video_data_t ffmpeg_video_data_alloc(const char* url, enum AVPixelFormat pixel_format) {
@@ -307,7 +313,9 @@ ffmpeg_video_data_t ffmpeg_video_data_alloc(const char* url, enum AVPixelFormat 
         .packet = NULL,
         .frame = NULL,
         .stream_index = AVERROR_STREAM_NOT_FOUND,
-        .result = 0
+        .result = 0,
+        .pixels = { NULL, NULL, NULL, NULL },
+        .pitch = { 0, 0, 0, 0 }
     };
 
     if ((ffmpeg_video_data.result = ffmpeg_format_context_alloc(&ffmpeg_video_data.format_context, url, AVMEDIA_TYPE_VIDEO, &ffmpeg_video_data.stream_index)) == 0) {
@@ -315,7 +323,14 @@ ffmpeg_video_data_t ffmpeg_video_data_alloc(const char* url, enum AVPixelFormat 
             if ((ffmpeg_video_data.result = ffmpeg_video_context_alloc(&ffmpeg_video_data.sws_context, ffmpeg_video_data.codec_context, pixel_format)) == 0) {
                 if ((ffmpeg_video_data.packet = av_packet_alloc()) != NULL) {
                     if ((ffmpeg_video_data.frame = av_frame_alloc()) != NULL) {
-                        return ffmpeg_video_data;
+                        if ((ffmpeg_video_data.pixels[0] = av_malloc(av_image_get_buffer_size(pixel_format, ffmpeg_video_data.codec_context->width, ffmpeg_video_data.codec_context->height, 1))) != NULL) {
+                            ffmpeg_video_data.pitch[0] = ffmpeg_video_data.codec_context->width * 4;
+
+                            return ffmpeg_video_data;
+                        }
+                        else {
+                            ffmpeg_video_data.result = AVERROR(ENOMEM);
+                        }
 
                         av_frame_free(&ffmpeg_video_data.frame);
                     }
@@ -429,54 +444,6 @@ void ffmpeg_audio_data_free(ffmpeg_audio_data_t* ffmpeg_audio_data) {
 
 #endif /* stb_image */
 
-#if 1 /* cglm */
-
-#include <cglm/cglm.h>
-
-void cglm_view_rotate(mat4 view, float value, vec3 axis) {
-    mat4 rotation_matrix;
-
-    glm_mat4_copy(view, rotation_matrix);
-    glm_rotate_make(view, value, axis);
-    glm_mul(view, rotation_matrix, view);
-}
-
-void cglm_view_move_up(mat4 view, float value) {
-    float yaw = -90.0f;
-    float pitch = 1.0f;
-    vec3 front = {
-        cosf(glm_rad(yaw)) * cosf(glm_rad(pitch)),
-        sinf(glm_rad(pitch)),
-        sinf(glm_rad(yaw)) * cosf(glm_rad(pitch))
-    };
-
-    glm_vec3_normalize(front);
-
-    view[3][0] += glm_rad(front[1]) * value;
-    view[3][1] += glm_rad(front[2]) * value;
-    view[3][2] += glm_rad(front[0]) * value;
-}
-
-void cglm_view_move(vec3 axis, mat4 view, float value) {
-    float yaw = -90.0f;
-    float pitch = 1.0f;
-    vec3 front = {
-        cosf(glm_rad(yaw)) * cosf(glm_rad(pitch)),
-        sinf(glm_rad(pitch)),
-        sinf(glm_rad(yaw)) * cosf(glm_rad(pitch))
-    };
-
-    glm_vec3_normalize(front);
-    glm_vec3_cross(front, axis, front);
-    glm_vec3_normalize(front);
-
-    view[3][0] += glm_rad(front[1]) * value;
-    view[3][1] += glm_rad(front[2]) * value;
-    view[3][2] += glm_rad(front[0]) * value;
-}
-
-#endif /* cglm */
-
 #if 1 /* miniaudio */
 
 #ifndef CP_UTF8
@@ -492,6 +459,7 @@ void cglm_view_move(vec3 axis, mat4 view, float value) {
 #define MA_NO_WAV
 #define MA_NO_FLAC
 #define MA_NO_MP3
+
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>
 
@@ -542,6 +510,54 @@ void ma_ffmpeg_start(const char* url) {
 }
 
 #endif /* miniaudio & FFmpeg */
+
+#if 1 /* cglm */
+
+#include <cglm/cglm.h>
+
+void cglm_view_rotate(mat4 view, float value, vec3 axis) {
+    mat4 rotation_matrix;
+
+    glm_mat4_copy(view, rotation_matrix);
+    glm_rotate_make(view, value, axis);
+    glm_mul(view, rotation_matrix, view);
+}
+
+void cglm_view_move_up(mat4 view, float value) {
+    float yaw = -90.0f;
+    float pitch = 1.0f;
+    vec3 front = {
+        cosf(glm_rad(yaw)) * cosf(glm_rad(pitch)),
+        sinf(glm_rad(pitch)),
+        sinf(glm_rad(yaw)) * cosf(glm_rad(pitch))
+    };
+
+    glm_vec3_normalize(front);
+
+    view[3][0] += glm_rad(front[1]) * value;
+    view[3][1] += glm_rad(front[2]) * value;
+    view[3][2] += glm_rad(front[0]) * value;
+}
+
+void cglm_view_move(vec3 axis, mat4 view, float value) {
+    float yaw = -90.0f;
+    float pitch = 1.0f;
+    vec3 front = {
+        cosf(glm_rad(yaw)) * cosf(glm_rad(pitch)),
+        sinf(glm_rad(pitch)),
+        sinf(glm_rad(yaw)) * cosf(glm_rad(pitch))
+    };
+
+    glm_vec3_normalize(front);
+    glm_vec3_cross(front, axis, front);
+    glm_vec3_normalize(front);
+
+    view[3][0] += glm_rad(front[1]) * value;
+    view[3][1] += glm_rad(front[2]) * value;
+    view[3][2] += glm_rad(front[0]) * value;
+}
+
+#endif /* cglm */
 
 #if 1 /* curl */
 
@@ -986,27 +1002,27 @@ void xml_realbooru_com_get_source_url(const char* url_to_list, int pid, char** o
 #include <cJSON.h>
 
 void cjson_find(cJSON* node) {
-    static uint32_t G_CJSON_COUNT;
+    static uint32_t CJSON_COUNT_SPACES;
 
     while (node) {
         if (node->type == cJSON_Array) {
-            printf("%*c\"%s\": [\n", G_CJSON_COUNT, ' ', node->string);
+            printf("%*c\"%s\": [\n", CJSON_COUNT_SPACES, ' ', node->string);
         }
         if (node->type == cJSON_String) {
-            printf("%*c\"%s\": \"%s\"\n", G_CJSON_COUNT, ' ', node->string, node->valuestring);
+            printf("%*c\"%s\": \"%s\"\n", CJSON_COUNT_SPACES, ' ', node->string, node->valuestring);
         }
         if (node->type == cJSON_Number) {
-            printf("%*c\"%s\": %f\n", G_CJSON_COUNT, ' ', node->string, node->valuedouble);
+            printf("%*c\"%s\": %f\n", CJSON_COUNT_SPACES, ' ', node->string, node->valuedouble);
         }
 
         if (node->child != NULL) {
-            G_CJSON_COUNT += 4;
+            CJSON_COUNT_SPACES += 4;
             cjson_find(node->child);
-            G_CJSON_COUNT -= 4;
+            CJSON_COUNT_SPACES -= 4;
         }
 
         if (node->type == cJSON_Array) {
-            printf("%*c]\n", G_CJSON_COUNT, ' ');
+            printf("%*c]\n", CJSON_COUNT_SPACES, ' ');
         }
 
         node = node->next;
@@ -1052,11 +1068,21 @@ GLuint ogl_texture_create(GLenum target, GLint mag_filter, GLint min_filter, GLi
         glTexParameteri(target, GL_TEXTURE_WRAP_S, wrap_s);
         glTexParameteri(target, GL_TEXTURE_WRAP_T, wrap_t);
         glTexImage2D(target, 0, format, width, height, 0, format, type, pixels);
-        glGenerateMipmap(target);
+
+        if (min_filter == GL_NEAREST_MIPMAP_NEAREST || min_filter == GL_LINEAR_MIPMAP_NEAREST || min_filter == GL_NEAREST_MIPMAP_LINEAR || min_filter == GL_LINEAR_MIPMAP_LINEAR) {
+            glGenerateMipmap(target);
+        }
+
         glBindTexture(target, 0);
     }
 
     return texture;
+}
+
+void ogl_texture_update(GLenum target, GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels) {
+    glBindTexture(target, texture);
+    glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+    glBindTexture(target, 0);
 }
 
 GLuint ogl_shader_create(GLenum type, GLsizei count, const GLchar* const* string, const GLint* length) {
@@ -1210,14 +1236,14 @@ void ogl_material_initialize(ogl_material_t* material) {
 
 typedef struct ogl_primitive {
     GLuint vertex_array_object;
-    GLuint element_buffer_object;
-    GLsizei count;
-    GLenum type;
+    GLuint element_array_buffer_object; /* indices */
+    GLsizei count; /* indices count */
+    GLenum type; /* indices type */
 } ogl_primitive_t;
 
 void ogl_primitive_initialize(ogl_primitive_t* primitive) {
     primitive->vertex_array_object = 0;
-    primitive->element_buffer_object = 0;
+    primitive->element_array_buffer_object = 0;
     primitive->count = 0;
     primitive->type = 0;
 }
@@ -1398,9 +1424,7 @@ void cgltf_material_to_ogl_material(const cgltf_material* material, ogl_material
         "#version 330 core\n"
 
         "in vec2 TextureCoordinates;\n"
-
         "out vec4 FragmentColor;\n"
-
         "uniform sampler2D texture0;\n"
 
         "void main() {\n"
@@ -1430,7 +1454,7 @@ void cgltf_material_to_ogl_material(const cgltf_material* material, ogl_material
                     out_material->texture = ogl_texture_create(
                         GL_TEXTURE_2D,
                         material->pbr_metallic_roughness.base_color_texture.texture->sampler != NULL ? material->pbr_metallic_roughness.base_color_texture.texture->sampler->mag_filter : GL_LINEAR,
-                        material->pbr_metallic_roughness.base_color_texture.texture->sampler != NULL ? material->pbr_metallic_roughness.base_color_texture.texture->sampler->min_filter : GL_NEAREST_MIPMAP_LINEAR,
+                        material->pbr_metallic_roughness.base_color_texture.texture->sampler != NULL ? material->pbr_metallic_roughness.base_color_texture.texture->sampler->min_filter : GL_NEAREST,
                         material->pbr_metallic_roughness.base_color_texture.texture->sampler != NULL ? material->pbr_metallic_roughness.base_color_texture.texture->sampler->wrap_s : GL_REPEAT,
                         material->pbr_metallic_roughness.base_color_texture.texture->sampler != NULL ? material->pbr_metallic_roughness.base_color_texture.texture->sampler->wrap_t : GL_REPEAT,
                         width,
@@ -1483,7 +1507,7 @@ void cgltf_primitive_to_ogl_primitive(const cgltf_primitive* primitive, ogl_prim
 
         if ((accessor_data = cgltf_accessor_alloc_and_parse_data(primitive->indices)) != NULL) {
             glBindVertexArray(out_primitive->vertex_array_object);
-            out_primitive->element_buffer_object = ogl_buffer_create(GL_ELEMENT_ARRAY_BUFFER, primitive->indices->buffer_view->size, accessor_data, GL_STATIC_DRAW);
+            out_primitive->element_array_buffer_object = ogl_buffer_create(GL_ELEMENT_ARRAY_BUFFER, primitive->indices->buffer_view->size, accessor_data, GL_STATIC_DRAW);
             glBindVertexArray(0);
 
             free(accessor_data);
@@ -1504,14 +1528,14 @@ void cgltf_primitive_to_ogl_primitive(const cgltf_primitive* primitive, ogl_prim
 
     for (cgltf_size i = 0; i < primitive->attributes_count; ++i) {
         void* accessor_data;
-        GLuint vertex_buffer_object;
+        GLuint array_buffer_object;
 
         glBindVertexArray(out_primitive->vertex_array_object);
 
         if ((accessor_data = cgltf_accessor_alloc_and_parse_data(primitive->attributes[i].data)) != NULL) {
             if (primitive->attributes[i].type == cgltf_attribute_type_position) {
-                vertex_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
-                ogl_buffer_attribute(GL_ARRAY_BUFFER, vertex_buffer_object, 0, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+                array_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
+                ogl_buffer_attribute(GL_ARRAY_BUFFER, array_buffer_object, 0, 3, GL_FLOAT, GL_FALSE, 0, NULL);
 
                 if (primitive->indices == NULL) {
                     out_primitive->count = primitive->attributes[i].data->count;
@@ -1520,16 +1544,16 @@ void cgltf_primitive_to_ogl_primitive(const cgltf_primitive* primitive, ogl_prim
                 // culling_set_from_data(accessor_data, primitive->attributes[i].data->buffer_view->size / sizeof(float), &out_primitive->culling);
             }
             else if (primitive->attributes[i].type == cgltf_attribute_type_normal) {
-                vertex_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
-                ogl_buffer_attribute(GL_ARRAY_BUFFER, vertex_buffer_object, 1, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+                array_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
+                ogl_buffer_attribute(GL_ARRAY_BUFFER, array_buffer_object, 1, 3, GL_FLOAT, GL_FALSE, 0, NULL);
             }
             else if (primitive->attributes[i].type == cgltf_attribute_type_tangent) {
-                vertex_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
-                ogl_buffer_attribute(GL_ARRAY_BUFFER, vertex_buffer_object, 2, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+                array_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
+                ogl_buffer_attribute(GL_ARRAY_BUFFER, array_buffer_object, 2, 3, GL_FLOAT, GL_FALSE, 0, NULL);
             }
             else if (primitive->attributes[i].type == cgltf_attribute_type_texcoord) {
-                vertex_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
-                ogl_buffer_attribute(GL_ARRAY_BUFFER, vertex_buffer_object, 3, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+                array_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
+                ogl_buffer_attribute(GL_ARRAY_BUFFER, array_buffer_object, 3, 2, GL_FLOAT, GL_FALSE, 0, NULL);
             }
             else if (primitive->attributes[i].type == cgltf_attribute_type_color) {
                 if (primitive->attributes[i].data->component_type == cgltf_component_type_r_16u) {
@@ -1557,23 +1581,23 @@ void cgltf_primitive_to_ogl_primitive(const cgltf_primitive* primitive, ogl_prim
                     }
                 }
 
-                vertex_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, (primitive->attributes[i].data->count * 4 * sizeof(float)), accessor_data, GL_STATIC_DRAW);
-                ogl_buffer_attribute(GL_ARRAY_BUFFER, vertex_buffer_object, 4, 4, GL_FLOAT, GL_FALSE, 0, NULL);
+                array_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, (primitive->attributes[i].data->count * 4 * sizeof(float)), accessor_data, GL_STATIC_DRAW);
+                ogl_buffer_attribute(GL_ARRAY_BUFFER, array_buffer_object, 4, 4, GL_FLOAT, GL_FALSE, 0, NULL);
             }
             else if (primitive->attributes[i].type == cgltf_attribute_type_joints) {
-                vertex_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
-                ogl_buffer_attribute(GL_ARRAY_BUFFER, vertex_buffer_object, 5, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+                array_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
+                ogl_buffer_attribute(GL_ARRAY_BUFFER, array_buffer_object, 5, 3, GL_FLOAT, GL_FALSE, 0, NULL);
             }
             else if (primitive->attributes[i].type == cgltf_attribute_type_weights) {
-                vertex_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
-                ogl_buffer_attribute(GL_ARRAY_BUFFER, vertex_buffer_object, 6, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+                array_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, primitive->attributes[i].data->buffer_view->size, accessor_data, GL_STATIC_DRAW);
+                ogl_buffer_attribute(GL_ARRAY_BUFFER, array_buffer_object, 6, 3, GL_FLOAT, GL_FALSE, 0, NULL);
             }
 
             free(accessor_data);
         }
 
         glBindVertexArray(0);
-        glDeleteBuffers(1, &vertex_buffer_object);
+        glDeleteBuffers(1, &array_buffer_object);
     }
 }
 
@@ -1717,8 +1741,8 @@ cgltf_result cgltf_to_ogl(const char* url, ogl_scene_t* scene) {
 void ogl_primitive_draw(const ogl_primitive_t* primitive) {
     glBindVertexArray(primitive->vertex_array_object);
 
-    if (primitive->element_buffer_object > 0 && primitive->count > 0 && primitive->type != 0) {
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, primitive->element_buffer_object);
+    if (primitive->element_array_buffer_object > 0 && primitive->count > 0 && primitive->type != 0) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, primitive->element_array_buffer_object);
         glDrawElements(GL_TRIANGLES, primitive->count, primitive->type, NULL);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     }
@@ -1882,8 +1906,8 @@ void ogl_draw_node(const ogl_node_t* node, mat4 projection, mat4 view, vec4 plan
                 }
 
                 glBindVertexArray(node->mesh->primitives[i].vertex_array_object);
-                    if (node->mesh->primitives[i].element_buffer_object > 0) {
-                        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, node->mesh->primitives[i].element_buffer_object);
+                    if (node->mesh->primitives[i].element_array_buffer_object > 0) {
+                        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, node->mesh->primitives[i].element_array_buffer_object);
                             glDrawElements(GL_TRIANGLES, node->mesh->primitives[i].count, node->mesh->primitives[i].type, NULL);
                         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
                     }
@@ -1926,13 +1950,24 @@ void ogl_scene_draw(const ogl_scene_t* scene, mat4 projection, mat4 view) {
 
 GLboolean something_disgusting(GLFWwindow* window) {
     static int initialized;
-    static mat4 projection;
-    static mat4 view = GLM_MAT4_IDENTITY_INIT;
     static double cursor_position_x;
     static double cursor_position_y;
     static int window_width;
     static int window_height;
-    static ogl_scene_t scene;
+    // static ogl_scene_t scene;
+
+    static ffmpeg_video_data_t ffmpeg_video_data;
+
+    static mat4 model = GLM_MAT4_IDENTITY_INIT;
+    static mat4 view = GLM_MAT4_IDENTITY_INIT;
+    static mat4 projection;
+
+    static GLuint texture;
+    static GLuint program;
+    static GLuint vertex_array_object;
+    static GLuint element_array_buffer_object; /* indices */
+    static GLsizei count; /* indices count */
+    static GLenum type; /* indices type */
 
     if (initialized == 0) {
         glEnable(GL_DEPTH_TEST);
@@ -1948,6 +1983,122 @@ GLboolean something_disgusting(GLFWwindow* window) {
         glm_perspective(GLM_PI_4f, (float)window_width / window_height, 0.001f, FLT_MAX, projection);
         glfwSetWindowUserPointer(window, projection);
         // cgltf_to_ogl("https://github.com/KhronosGroup/glTF-Sample-Models/raw/main/2.0/Corset/glTF-Binary/Corset.glb", &scene);
+
+        char* url_to_list;
+        int pid_count;
+
+        xml_rule34_xxx_get_base_url_and_pid(&url_to_list, &pid_count);
+
+        if (url_to_list != NULL) {
+            char* url;
+            int pid_current;
+
+            pid_current = rand() % pid_count;
+            xml_rule34_xxx_get_source_url(url_to_list, pid_current, &url);
+
+            if (url != NULL) {
+                printf("%s&pid=%i\n", url_to_list, pid_current);
+                puts(url);
+
+                ffmpeg_video_data = ffmpeg_video_data_alloc(url, AV_PIX_FMT_RGBA);
+
+                if (ffmpeg_video_data.result == 0) {
+                    if ((ffmpeg_video_data.result = ffmpeg_get_next_frame(ffmpeg_video_data.format_context, ffmpeg_video_data.packet, ffmpeg_video_data.stream_index, ffmpeg_video_data.codec_context, ffmpeg_video_data.frame)) == 0) {
+                        if ((ffmpeg_video_data.result = sws_scale(ffmpeg_video_data.sws_context, ffmpeg_video_data.frame->data, ffmpeg_video_data.frame->linesize, 0, ffmpeg_video_data.codec_context->height, ffmpeg_video_data.pixels, ffmpeg_video_data.pitch)) >= 0) {
+                            texture = ogl_texture_create(GL_TEXTURE_2D, GL_LINEAR, GL_NEAREST, GL_REPEAT, GL_REPEAT, ffmpeg_video_data.codec_context->width, ffmpeg_video_data.codec_context->height, GL_RGBA, GL_UNSIGNED_BYTE, ffmpeg_video_data.pixels[0]);
+                        }
+                    }
+                }
+
+                free(url);
+            }
+
+            free(url_to_list);
+        }
+
+
+        const char* vertex_shader_source =
+            "#version 330 core\n"
+
+            "layout (location = 0) in vec3 aPositions;\n"
+            // "layout (location = 1) in vec3 aNormals;\n"
+            // "layout (location = 2) in vec3 aTangents;\n"
+            "layout (location = 3) in vec2 aTextureCoordinates;\n"
+            // "layout (location = 4) in vec4 aColors;\n"
+            // "layout (location = 5) in vec3 aJoints;\n"
+            // "layout (location = 6) in vec3 aWeights;\n"
+
+            "out vec2 TextureCoordinates;\n"
+
+            "uniform mat4 model;\n"
+            "uniform mat4 view;\n"
+            "uniform mat4 projection;\n"
+
+            "void main() {\n"
+            "    TextureCoordinates = aTextureCoordinates;\n"
+            "    gl_Position = projection * view * model * vec4(aPositions, 1.0);\n"
+            "}\n"
+        ;
+
+        const char* fragment_shader_source =
+            "#version 330 core\n"
+
+            "in vec2 TextureCoordinates;\n"
+            "out vec4 FragmentColor;\n"
+            "uniform sampler2D texture0;\n"
+
+            "void main() {\n"
+            "    FragmentColor = texture(texture0, TextureCoordinates);\n"
+            "}\n"
+        ;
+
+        GLuint shaders[] = {
+            ogl_shader_create(GL_VERTEX_SHADER, 1, &vertex_shader_source, NULL),
+            ogl_shader_create(GL_FRAGMENT_SHADER, 1, &fragment_shader_source, NULL)
+        };
+
+        program = ogl_program_create(sizeof(shaders) / sizeof(shaders[0]), shaders);
+
+        glDeleteShader(shaders[0]);
+        glDeleteShader(shaders[1]);
+
+
+        glGenVertexArrays(1, &vertex_array_object);
+        glBindVertexArray(vertex_array_object);
+
+        GLfloat positions_array[] = {
+            0.5f * ffmpeg_video_data.codec_context->width / 1000.0f, 0.5f * ffmpeg_video_data.codec_context->height / 1000.0f, 0.0f,
+            -0.5f * ffmpeg_video_data.codec_context->width / 1000.0f, 0.5f * ffmpeg_video_data.codec_context->height / 1000.0f, 0.0f,
+            -0.5f * ffmpeg_video_data.codec_context->width / 1000.0f, -0.5f * ffmpeg_video_data.codec_context->height / 1000.0f, 0.0f,
+            0.5f * ffmpeg_video_data.codec_context->width / 1000.0f, -0.5f * ffmpeg_video_data.codec_context->height / 1000.0f, 0.0f
+        };
+
+        GLuint positions_array_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, sizeof(positions_array), positions_array, GL_STATIC_DRAW);
+        ogl_buffer_attribute(GL_ARRAY_BUFFER, positions_array_buffer_object, 0, 3, GL_FLOAT, GL_FALSE, 0, NULL);
+
+        GLfloat texture_coordinates_array[] = {
+            1.0f, 0.0f,
+            0.0f, 0.0f,
+            0.0f, 1.0f,
+            1.0f, 1.0f
+        };
+
+        GLuint texture_coordinates_array_buffer_object = ogl_buffer_create(GL_ARRAY_BUFFER, sizeof(texture_coordinates_array), texture_coordinates_array, GL_STATIC_DRAW);
+        ogl_buffer_attribute(GL_ARRAY_BUFFER, texture_coordinates_array_buffer_object, 3, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+
+        GLuint indices_array[] = {
+            0, 1, 2,
+            3, 0, 2
+        };
+
+        element_array_buffer_object = ogl_buffer_create(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices_array), indices_array, GL_STATIC_DRAW);
+        count = sizeof(indices_array) / sizeof(indices_array[0]);
+        type = GL_UNSIGNED_INT;
+
+        glBindVertexArray(0);
+
+        glDeleteBuffers(1, &texture_coordinates_array_buffer_object);
+        glDeleteBuffers(1, &positions_array_buffer_object);
 
         initialized = 1;
     }
@@ -2021,6 +2172,10 @@ GLboolean something_disgusting(GLFWwindow* window) {
             cglm_view_move((vec3) { 0.0f, 0.0f, 1.0f }, view, -move_speed);
         }
 
+        if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) {
+            glm_mat4_identity(view);
+            glm_ortho(-1.0f, 1.0f, -1.0f, 1.0f, 0.001f, FLT_MAX, projection);
+        }
         if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS) {
             glm_mat4_identity(view);
             glm_perspective(GLM_PI_4f, (float)window_width / window_height, 0.001f, FLT_MAX, projection);
@@ -2032,9 +2187,32 @@ GLboolean something_disgusting(GLFWwindow* window) {
         static vec4 planes[6];
         glm_frustum_planes(projection_view, planes);
 
+
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        ogl_scene_draw(&scene, projection, view, planes);
+        // ogl_scene_draw(&scene, projection, view, planes);
+
+        if ((ffmpeg_video_data.result = ffmpeg_get_next_frame(ffmpeg_video_data.format_context, ffmpeg_video_data.packet, ffmpeg_video_data.stream_index, ffmpeg_video_data.codec_context, ffmpeg_video_data.frame)) == 0) {
+            if ((ffmpeg_video_data.result = sws_scale(ffmpeg_video_data.sws_context, ffmpeg_video_data.frame->data, ffmpeg_video_data.frame->linesize, 0, ffmpeg_video_data.codec_context->height, ffmpeg_video_data.pixels, ffmpeg_video_data.pitch)) >= 0) {
+                ogl_texture_update(GL_TEXTURE_2D, texture, 0, 0, 0, ffmpeg_video_data.codec_context->width, ffmpeg_video_data.codec_context->height, GL_RGBA, GL_UNSIGNED_BYTE, ffmpeg_video_data.pixels[0]);
+            }
+        }
+
+        glUseProgram(program);
+            glUniformMatrix4fv(glGetUniformLocation(program, "projection"), 1, GL_FALSE, projection);
+            glUniformMatrix4fv(glGetUniformLocation(program, "view"), 1, GL_FALSE, view);
+            glUniformMatrix4fv(glGetUniformLocation(program, "model"), 1, GL_FALSE, model);
+
+            glBindTexture(GL_TEXTURE_2D, texture);
+
+            glBindVertexArray(vertex_array_object);
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_array_buffer_object);
+                    glDrawElements(GL_TRIANGLES, count, type, NULL);
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+            glBindVertexArray(0);
+
+            glBindTexture(GL_TEXTURE_2D, 0);
+        glUseProgram(0);
 
         return GL_TRUE;
     }
@@ -2048,7 +2226,7 @@ void glfw_error_callback(int error_code, const char* description) {
 
 void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
-    // glm_perspective(GLM_PI_4f, (float)width / height, 0.001f, FLT_MAX, glfwGetWindowUserPointer(window));
+    glm_perspective(GLM_PI_4f, (float)width / height, 0.001f, FLT_MAX, glfwGetWindowUserPointer(window));
 }
 
 void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -2107,6 +2285,7 @@ void glfw_start() {
 
 int main(int argc, char** argv) {
     glfw_start();
+
     return 0;
 
 #if 0
